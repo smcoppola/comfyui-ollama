@@ -34,6 +34,13 @@ CONNECT_TIMEOUT = 10
 
 THINK_LEVELS = ["auto", "low", "medium", "high"]
 
+# Seed widget for Generate and Chat. Defaults to 'fixed', so an unchanged node reuses its result as before.
+SEED_INPUT = ("INT", {
+    "default": 0, "min": 0, "max": 2 ** 31, "control_after_generate": "fixed",
+    "tooltip": "Random seed for the answer. The same seed and inputs usually give the same answer, and ComfyUI reuses "
+               "the previous result. Set the control below to 'randomize' to get a fresh answer on every run.",
+})
+
 # Chat messages remembered per node (unique_id) when 'remember_history' is enabled
 CHAT_SESSIONS: dict[str, list[dict]] = {}
 
@@ -61,33 +68,47 @@ OLLAMA_VERSION_PROBLEM = _ollama_version_problem()
 if OLLAMA_VERSION_PROBLEM:
     logging.warning(OLLAMA_VERSION_PROBLEM)
 
+# Options Ollama no longer supports. Their widgets stay so saved workflows still load, but they aren't sent.
+REMOVED_OPTIONS = ["mirostat", "mirostat_eta", "mirostat_tau", "tfs_z"]
+
 # Function to filter enabled options
 def _filter_enabled_options(options: dict[str, Any] | None) -> dict[str, Any] | None:
     """Return only the ollama options whose 'enable_*' flag is True."""
     if not options:
         return None
     enablers = [
-        "enable_mirostat",
-        "enable_mirostat_eta",
-        "enable_mirostat_tau",
         "enable_num_ctx",
         "enable_repeat_last_n",
         "enable_repeat_penalty",
         "enable_temperature",
         "enable_seed",
         "enable_stop",
-        "enable_tfs_z",
         "enable_num_predict",
         "enable_top_k",
         "enable_top_p",
         "enable_min_p",
+        "enable_num_gpu",
+        "enable_presence_penalty",
+        "enable_frequency_penalty",
     ]
     out: dict[str, Any] = {}
     for enabler in enablers:
         if options.get(enabler, False):
             key = enabler.replace("enable_", "")
             out[key] = options[key]
+    # Ollama requires a list of stop sequences and rejects the whole request for a plain string.
+    if "stop" in out:
+        stop = out.pop("stop")
+        if stop:
+            out["stop"] = [stop]
     return out or None
+
+
+def _with_seed(request_options: dict[str, Any] | None, seed: int | None) -> dict[str, Any] | None:
+    """Add the node's seed. A seed enabled on the (older) Ollama Options node takes precedence."""
+    if seed is None:
+        return request_options
+    return {"seed": seed, **(request_options or {})}
 
 
 def _make_client(url: str, request_timeout: int | None) -> Client:
@@ -273,38 +294,39 @@ class OllamaOptionsV2:
         seed = random.randint(1, 2 ** 31)
         return {
             "required": {
-                "enable_mirostat": ("BOOLEAN", {"default": False}),
-                "mirostat": ("INT", {"default": 0, "min": 0, "max":2, "step": 1, "tooltip": "Whether to use Mirostat sampling. Mirostat is an algorithm that actively maintains the quality of generated text within a desired range during text generation. (0 = disabled, 1 = Mirostat 1, 2 = Mirostat 2.0)"}),
+                "enable_mirostat": ("BOOLEAN", {"default": False, "tooltip": "No longer supported by Ollama; ignored."}),
+                "mirostat": ("INT", {"default": 0, "min": 0, "max":2, "step": 1, "tooltip": "No longer supported by Ollama; ignored."}),
 
-                "enable_mirostat_eta": ("BOOLEAN", {"default": False}),
-                "mirostat_eta": ("FLOAT", {"default": 0.1, "min": 0, "step": 0.1, "tooltip": "Mirostat's learning rate parameter influences how quickly the algorithm responds to feedback from the generated text."}),
+                "enable_mirostat_eta": ("BOOLEAN", {"default": False, "tooltip": "No longer supported by Ollama; ignored."}),
+                "mirostat_eta": ("FLOAT", {"default": 0.1, "min": 0, "step": 0.1, "tooltip": "No longer supported by Ollama; ignored."}),
 
-                "enable_mirostat_tau": ("BOOLEAN", {"default": False}),
-                "mirostat_tau": ("FLOAT", {"default": 5.0, "min": 0, "step": 0.1, "tooltip": "Mirostat's target entropy parameter controls the balance between coherence and diversity in the generated text."}),
+                "enable_mirostat_tau": ("BOOLEAN", {"default": False, "tooltip": "No longer supported by Ollama; ignored."}),
+                "mirostat_tau": ("FLOAT", {"default": 5.0, "min": 0, "step": 0.1, "tooltip": "No longer supported by Ollama; ignored."}),
 
                 "enable_num_ctx": ("BOOLEAN", {"default": False}),
-                "num_ctx": ("INT", {"default": 2048, "min": 0, "max": 2 ** 31, "step": 1, "tooltip": "Sets the size of the context window used to generate the next token."}),
+                "num_ctx": ("INT", {"default": 8192, "min": 0, "max": 2 ** 31, "step": 1, "tooltip": "Size of the context window in tokens: the prompt, images, thinking and answer together. Leave disabled to let Ollama choose (4k to 256k depending on VRAM). Changing it makes Ollama reload the model."}),
 
                 "enable_repeat_last_n": ("BOOLEAN", {"default": False}),
-                "repeat_last_n": ("INT", {"default": 64, "min": -1, "max": 64, "step": 1, "tooltip": "Sets how far back for the model to look back to prevent repetition. (0 = disabled, -1 = num_ctx)"}),
+                "repeat_last_n": ("INT", {"default": 64, "min": -1, "max": 2 ** 31, "step": 1, "tooltip": "Sets how far back for the model to look back to prevent repetition. (0 = disabled, -1 = num_ctx)"}),
 
                 "enable_repeat_penalty": ("BOOLEAN", {"default": False}),
-                "repeat_penalty": ("FLOAT", {"default": 1.1, "min": 0, "max": 2, "step": 0.05, "tooltip": "Sets how strongly to penalize repetitions. A higher value (e.g., 1.5) will penalize repetitions more strongly, while a lower value (e.g., 0.9) will be more lenient."}),
+                "repeat_penalty": ("FLOAT", {"default": 1.1, "min": 0, "max": 2, "step": 0.05, "tooltip": "Sets how strongly to penalize repetitions. A higher value (e.g., 1.5) will penalize repetitions more strongly, while a lower value (e.g., 0.9) will be more lenient. Ollama's default is 1.0 (off)."}),
 
                 "enable_temperature": ("BOOLEAN", {"default": False}),
                 "temperature": ("FLOAT", {"default": 0.8, "min": -10, "max": 10, "step": 0.05, "tooltip": "Increasing the temperature will make the model answer more creatively."}),
 
-                "enable_seed": ("BOOLEAN", {"default": False}),
-                "seed": ("INT", {"default": seed, "min": 0, "max": 2 ** 31, "step": 1, "tooltip": "Sets the random number seed to use for generation. Setting this to a specific number will make the model generate the same text for the same prompt."}),
+                "enable_seed": ("BOOLEAN", {"default": False, "tooltip": "Deprecated: use the seed on the Ollama Generate or Ollama Chat node. When enabled here, it overrides that seed."}),
+                # 'fixed': a randomized seed here would change this node's output on every queue and re-run every connected node, even with enable_seed off.
+                "seed": ("INT", {"default": seed, "min": 0, "max": 2 ** 31, "step": 1, "control_after_generate": "fixed", "tooltip": "Deprecated: use the seed on the Ollama Generate or Ollama Chat node. When enabled here, it overrides that seed."}),
 
                 "enable_stop": ("BOOLEAN", {"default": False}),
                 "stop": ("STRING", {"default": "", "multiline": False, "tooltip": "When this pattern is encountered the LLM will stop generating text and return."}),
 
-                "enable_tfs_z": ("BOOLEAN", {"default": False}),
-                "tfs_z": ("FLOAT", {"default": 1, "min": 1, "max": 1000, "step": 0.05}),
+                "enable_tfs_z": ("BOOLEAN", {"default": False, "tooltip": "No longer supported by Ollama; ignored."}),
+                "tfs_z": ("FLOAT", {"default": 1, "min": 1, "max": 1000, "step": 0.05, "tooltip": "No longer supported by Ollama; ignored."}),
 
                 "enable_num_predict": ("BOOLEAN", {"default": False}),
-                "num_predict": ("INT", {"default": -1, "min": -2, "max": 2048, "step": 1, "tooltip": "Maximum number of tokens to predict when generating text. The default -1 means infinite generation."}),
+                "num_predict": ("INT", {"default": -1, "min": -2, "max": 2 ** 31, "step": 1, "tooltip": "Maximum number of tokens to generate, including thinking. The default -1 means no limit. If it's too low for a thinking model, the answer comes back empty."}),
 
                 "enable_top_k": ("BOOLEAN", {"default": False}),
                 "top_k": ("INT", {"default": 40, "min": 0, "max": 100, "step": 1, "tooltip": "Reduces the probability of generating nonsense. A higher value (e.g. 100) will give more diverse answers, while a lower value (e.g. 10) will be more conservative."}),
@@ -319,6 +341,15 @@ class OllamaOptionsV2:
             },
             "optional": {
                 "request_timeout": ("INT", {"default": DEFAULT_REQUEST_TIMEOUT, "min": 0, "max": 3600, "step": 1, "tooltip": "Seconds to wait while Ollama sends nothing (loading the model, reading the prompt, or between tokens) before giving up. 0 = wait forever. Not sent to Ollama."}),
+
+                "enable_num_gpu": ("BOOLEAN", {"default": False}),
+                "num_gpu": ("INT", {"default": -1, "min": -1, "max": 999, "step": 1, "tooltip": "How many model layers Ollama puts on the GPU. -1 = automatic, 0 = CPU only. Lower it to leave VRAM for ComfyUI. Changing it makes Ollama reload the model."}),
+
+                "enable_presence_penalty": ("BOOLEAN", {"default": False}),
+                "presence_penalty": ("FLOAT", {"default": 0.0, "min": -2, "max": 10, "step": 0.05, "tooltip": "Lowers the chance of any token that has already appeared, by the same amount however often it appeared. Typical values are 0 to 2."}),
+
+                "enable_frequency_penalty": ("BOOLEAN", {"default": False}),
+                "frequency_penalty": ("FLOAT", {"default": 0.0, "min": -2, "max": 10, "step": 0.05, "tooltip": "Lowers the chance of a token more each time it appears. Typical values are 0 to 1; higher values quickly make the text strange."}),
             },
         }
 
@@ -329,6 +360,10 @@ class OllamaOptionsV2:
     DESCRIPTION = "Various settings for advanced configuration of Ollama inference. See Ollama documentation for more details."
 
     def ollama_options(self, **kargs):
+
+        ignored = [key for key in REMOVED_OPTIONS if kargs.get("enable_" + key)]
+        if ignored:
+            logging.warning(f"[Ollama Options] {', '.join(ignored)} are no longer supported by Ollama and are ignored.")
 
         if kargs['debug']:
             print("--- ollama options v2 dump\n")
@@ -403,7 +438,7 @@ class OllamaGenerateV2:
                 "context": ("OLLAMA_CONTEXT", {"forceInput": False, "tooltip": "Optionally set an existing model context, useful for multi-turn conversations, follow-up questions."},),
                 "meta": ("OLLAMA_META", {"forceInput": False, "tooltip": "Use this input to chain multiple 'Ollama Generate' nodes. In this case the connectivity and options inputs are passed along."},),
                 "think_level": (THINK_LEVELS, {"default": "auto", "tooltip": "How much the model thinks when 'think' is enabled. 'auto' uses the model's default. Levels only work on models that support them, such as gpt-oss."}),
-                "disable_cache": ("BOOLEAN", {"default": False, "tooltip": "Re-run on every queue even when the inputs haven't changed, to get a fresh answer each time. Off = ComfyUI reuses the previous result."}),
+                "seed": SEED_INPUT,
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -414,12 +449,7 @@ class OllamaGenerateV2:
     CATEGORY = "Ollama"
     DESCRIPTION = "Text generation with Ollama. Supports vision tasks, multi-turn conversations, and advanced inference options. Connect an Ollama Connectivity node to set the server URL and model."
 
-    @classmethod
-    def IS_CHANGED(cls, disable_cache=False, **kwargs):
-        # NaN never equals the previous value, so ComfyUI re-runs the node.
-        return float("nan") if disable_cache else None
-
-    def ollama_generate_v2(self, system, prompt, think, keep_context, format, context = None, options=None, connectivity=None, images=None, meta=None, think_level="auto", disable_cache=False, unique_id=None):
+    def ollama_generate_v2(self, system, prompt, think, keep_context, format, context = None, options=None, connectivity=None, images=None, meta=None, think_level="auto", seed=None, unique_id=None):
 
         if OLLAMA_VERSION_PROBLEM:
             raise RuntimeError(OLLAMA_VERSION_PROBLEM)
@@ -459,7 +489,7 @@ class OllamaGenerateV2:
         keep_alive_unit =  'm' if meta['connectivity']['keep_alive_unit'] == "minutes" else 'h'
         request_keep_alive = str(meta['connectivity']['keep_alive']) + keep_alive_unit
 
-        request_options = _filter_enabled_options(options)
+        request_options = _with_seed(_filter_enabled_options(options), seed)
         request_think = _resolve_think(think, think_level)
 
         images_b64 = _images_to_b64(images)
@@ -618,13 +648,7 @@ class OllamaChat:
                         "tooltip": "How much the model thinks when 'think' is enabled. 'auto' uses the model's default. Levels only work on models that support them, such as gpt-oss.",
                     },
                 ),
-                "disable_cache": (
-                    "BOOLEAN",
-                    {
-                        "default": False,
-                        "tooltip": "Re-run on every queue even when the inputs haven't changed, to get a fresh answer each time. Off = ComfyUI reuses the previous result.",
-                    },
-                ),
+                "seed": SEED_INPUT,
             },
             "hidden": {"unique_id": "UNIQUE_ID"},
         }
@@ -645,11 +669,6 @@ class OllamaChat:
     CATEGORY = "Ollama"
     DESCRIPTION = "Text generation with Ollama Chat. Supports vision tasks, multi-turn conversations, and advanced inference options. Connect an Ollama Connectivity node to set the server URL and model."
 
-    @classmethod
-    def IS_CHANGED(cls, disable_cache=False, **kwargs):
-        # NaN never equals the previous value, so ComfyUI re-runs the node.
-        return float("nan") if disable_cache else None
-
     def ollama_chat(
         self,
         system: str,
@@ -665,7 +684,7 @@ class OllamaChat:
         reset_session: bool = False,
         remember_history: bool = False,
         think_level: str = "auto",
-        disable_cache: bool = False,
+        seed: int | None = None,
     ) -> tuple[str | None, str | None, dict[str, Any], list[dict]]:
 
         if OLLAMA_VERSION_PROBLEM:
@@ -707,7 +726,7 @@ class OllamaChat:
         )
         request_keep_alive = str(meta["connectivity"]["keep_alive"]) + keep_alive_unit
 
-        request_options = _filter_enabled_options(options)
+        request_options = _with_seed(_filter_enabled_options(options), seed)
         request_think = _resolve_think(think, think_level)
 
         images_b64 = _images_to_b64(images)

@@ -9,7 +9,11 @@ Reliability and speed fixes for current Ollama (tested with Ollama 0.40.3 and Co
 - Loading the model list no longer freezes the ComfyUI interface when the Ollama URL is wrong or slow, and errors are shown in the notification.
 - The model list is sorted alphabetically.
 - New `think_level` input (auto/low/medium/high) on Ollama Generate and Ollama Chat, for models with thinking levels such as gpt-oss.
-- New `disable_cache` input on Ollama Generate and Ollama Chat to get a fresh answer on every run, even when the inputs haven't changed.
+- New `seed` input on Ollama Generate and Ollama Chat, with ComfyUI's usual control after generate. `fixed` (the default) reuses the previous result while nothing changes; `randomize` gives a fresh answer on every run. The seed on Ollama Options is deprecated; if it's enabled, it still overrides the node's seed.
+- Ollama Options: `stop` works again. It was sent as plain text, which current Ollama rejects, so every request failed when it was enabled.
+- Ollama Options: `mirostat`, `mirostat_eta`, `mirostat_tau` and `tfs_z` are no longer supported by Ollama. They're kept so older workflows load, but they're no longer sent, and a warning is logged if they're enabled.
+- Ollama Options: new `num_gpu`, `presence_penalty` and `frequency_penalty` settings. `num_predict` and `repeat_last_n` accept larger values, and `num_ctx` starts at 8192 when enabled.
+- Ollama Options: the deprecated seed now defaults to `fixed`. When it was `randomize`, every connected node re-ran on every queue.
 - New "Unload models" button on Ollama Connectivity frees the VRAM Ollama is using, so ComfyUI can use it.
 - Fixed options being ignored on chained nodes connected through `meta`.
 - Fixed the KeyError 'context' crash in Ollama Generate.

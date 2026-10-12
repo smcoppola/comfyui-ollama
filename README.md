@@ -103,7 +103,7 @@ Settings:
 
 -   **think**: let the model reason before answering. The reasoning goes to the `thinking` output. Many current models think by default, so turning this off makes them answer much faster.
 -   **think_level**: `auto` uses the model's default. `low`/`medium`/`high` only work on models that support thinking levels, such as gpt-oss.
--   **disable_cache**: re-run on every queue even when the inputs haven't changed, to get a fresh answer each time.
+-   **seed**: the random seed for the answer, with ComfyUI's usual **control after generate**. `fixed` (the default) reuses the previous result while nothing changes. `randomize` gives a fresh answer on every run. The same seed and inputs usually give the same answer.
 
 The response is shown on the node while it's being generated, and ComfyUI's cancel button stops it.
 
@@ -121,7 +121,7 @@ A node for **conversational interaction** using the dedicated Ollama chat endpoi
     -   Each run starts a new conversation by default, which keeps prompts short and fast.
     -   Turn on **remember_history** to keep the conversation across runs (until ComfyUI restarts). **reset_session** clears it.
     -   The **history** output carries the conversation, for **chaining multiple chat nodes** in the same run.
-    -   Same **think**, **think_level** and **disable_cache** settings as OllamaGenerate.
+    -   Same **think**, **think_level** and **seed** settings as OllamaGenerate.
 
 Inputs:
 
@@ -158,7 +158,17 @@ Ollama API options can be found in [this table](https://github.com/ollama/ollama
 
 **request_timeout**: seconds to wait while Ollama sends nothing (loading the model, reading the prompt, or between tokens) before the node fails. Default 300, 0 = no limit. Without an Options node the default applies.
 
-Changing options such as `num_ctx` between runs or between nodes makes Ollama reload the model, which is slow.
+**num_gpu**: how many model layers Ollama puts on the GPU (-1 = automatic, 0 = CPU only). Lower it to leave VRAM for ComfyUI.
+
+**presence_penalty** and **frequency_penalty**: discourage repeating words. Presence lowers the chance of any word already used by the same amount; frequency lowers it more each time a word repeats.
+
+**num_ctx**: leave it disabled to let Ollama choose the context size (4k to 256k depending on VRAM). Setting it too low cuts off long prompts, images and thinking.
+
+Changing `num_ctx` or `num_gpu`, between runs or between nodes, makes Ollama reload the model, which is slow.
+
+**seed**: deprecated here, use the seed on OllamaGenerate or OllamaChat instead. If it's enabled on this node, it overrides theirs. In older workflows, set this seed's control to `fixed`: when it's `randomize`, every connected node re-runs on every queue, even with the seed disabled.
+
+`mirostat`, `mirostat_eta`, `mirostat_tau` and `tfs_z` are no longer supported by Ollama. They stay on the node so older workflows still load, but they're ignored.
 
 ## Troubleshooting
 
