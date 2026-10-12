@@ -105,7 +105,7 @@ Settings:
 -   **think_level**: `auto` uses the model's default. `low`/`medium`/`high` only work on models that support thinking levels, such as gpt-oss.
 -   **seed**: the random seed for the answer, with ComfyUI's usual **control after generate**. `fixed` (the default) reuses the previous result while nothing changes. `randomize` gives a fresh answer on every run. The same seed and inputs usually give the same answer.
 
-The response is shown on the node while it's being generated, and ComfyUI's cancel button stops it.
+While it runs, the node shows what Ollama is doing: loading the model, reading the prompt, thinking or writing the answer, with a token count and the elapsed time. Then it shows the answer. ComfyUI's cancel button stops it. Each run also logs one line to the ComfyUI console with the time spent loading, reading the prompt and generating, which helps to find out why a run was slow.
 
 **Notes:**
 

@@ -5,6 +5,8 @@ Reliability and speed fixes for current Ollama (tested with Ollama 0.40.3 and Co
 - Ollama Chat now sends the `think` setting. Many current models think by default, so before this the node always ran a full reasoning pass even with `think` off, which made it much slower.
 - Ollama Chat is now stateless by default: each run starts a new conversation. Turn on the new `remember_history` input to keep the conversation across runs. Before this, every run added to the history until ComfyUI restarted, so each run got slower. The `history` output now carries the conversation itself, so chained Chat nodes keep working.
 - Responses are streamed. The text appears on the node while it's generated, and ComfyUI's cancel button now stops the generation in Ollama.
+- Progress on the node: while waiting, it says whether Ollama is connecting, loading the model or reading the prompt, with the seconds elapsed. While generating, it shows the phase (thinking or writing the answer), the token count and the elapsed time.
+- Each run logs a timing summary to the console: model load time, prompt reading, tokens generated, speed, and how many tokens went to thinking.
 - Requests time out instead of hanging forever. A wrong URL fails within about 10 seconds, and a request fails if Ollama sends nothing for `request_timeout` seconds (new input on Ollama Options, default 300, 0 = no limit).
 - Loading the model list no longer freezes the ComfyUI interface when the Ollama URL is wrong or slow, and errors are shown in the notification.
 - The model list is sorted alphabetically.

@@ -4,6 +4,7 @@ import logging
 import random
 import re
 import sys
+import threading
 import time
 from importlib.metadata import PackageNotFoundError, version as package_version
 
@@ -175,31 +176,121 @@ def _split_inline_thinking(text: str) -> tuple[str, str]:
     return text.strip(), "\n".join(part.strip() for part in found if part.strip())
 
 
+class _NodeStatus:
+    """
+    Progress text on the node. Until the first token arrives it says what Ollama is doing (loading the model or
+    reading the prompt) and for how long, refreshed every second by a background thread. After that it shows the
+    phase, token count and elapsed time above the streaming text.
+    """
+
+    def __init__(self, node_id: str | None, url: str, model: str, image_count: int):
+        self._send = getattr(PromptServer.instance, "send_progress_text", None) if node_id is not None else None
+        self._node_id, self._url, self._model, self._image_count = node_id, url, model, image_count
+        self._started = time.monotonic()
+        self._shown_at = 0.0
+        self._streaming = threading.Event()
+        self._lock = threading.Lock()  # so the waiting thread never overwrites live text
+        if self._send:
+            threading.Thread(target=self._show_waiting, daemon=True).start()
+
+    def _elapsed(self) -> str:
+        return f"{time.monotonic() - self._started:.0f}s"
+
+    def _show_waiting(self):
+        cloud = self._model.endswith("cloud")
+        loaded = reachable = False
+        with Client(host=self._url, timeout=1) as client:
+            while True:
+                if not loaded and not cloud:
+                    # Ollama lists a model only once it has finished loading.
+                    try:
+                        loaded = any(m.model == self._model for m in client.ps().models)
+                        reachable = True
+                    except Exception:
+                        reachable = False
+                if cloud:
+                    doing = "Waiting for Ollama Cloud"
+                elif not reachable:
+                    doing = "Connecting to Ollama"
+                elif loaded:
+                    images = f" and {self._image_count} image{'s' if self._image_count > 1 else ''}" if self._image_count else ""
+                    doing = f"Reading prompt{images}"
+                else:
+                    doing = f"Loading {self._model}"
+                with self._lock:
+                    if self._streaming.is_set():
+                        return
+                    self._send(f"{doing}... {self._elapsed()}", self._node_id)
+                if self._streaming.wait(1.0):
+                    return
+
+    def stop_waiting(self):
+        with self._lock:
+            self._streaming.set()
+
+    def update(self, text: str, thinking: str, tokens: int):
+        """Live counters above the streaming text, at most four times a second."""
+        if not self._send:
+            return
+        if not self._streaming.is_set():
+            self.stop_waiting()
+        if time.monotonic() - self._shown_at < 0.25:
+            return
+        self._shown_at = time.monotonic()
+        answer, inline = _split_inline_thinking(text)
+        counters = f"{tokens} token{'s' if tokens != 1 else ''}, {self._elapsed()}"
+        if answer:
+            self._send(f"Writing answer... {counters}\n\n{answer}", self._node_id)
+        else:
+            self._send(f"Thinking... {counters}\n\n{(thinking + inline)[-2000:]}", self._node_id)
+
+    def show(self, text: str):
+        if self._send:
+            self._send(text, self._node_id)
+
+
+def _log_timing(model: str, last: Any, thinking_tokens: int):
+    """One console line showing where the time went, from Ollama's own measurements."""
+    if last is None or not last.done:
+        return
+    seconds = lambda ns: (ns or 0) / 1e9
+    load, total = seconds(last.load_duration), seconds(last.total_duration)
+    written, writing = last.eval_count or 0, seconds(last.eval_duration)
+    parts = [
+        f"loaded in {load:.1f}s" if load >= 0.5 else "already loaded",
+        f"read {last.prompt_eval_count or 0} prompt tokens in {seconds(last.prompt_eval_duration):.1f}s",
+        f"wrote {written} tokens in {writing:.1f}s" + (f" ({written / writing:.0f}/s)" if writing else "")
+        + (f", {thinking_tokens} of them thinking" if thinking_tokens else ""),
+    ]
+    logging.info(f"[Ollama] {model}: {', '.join(parts)}. Total {total:.1f}s.")
+
+
 def _stream(
     chunks: Iterator[Any],
     url: str,
     request_timeout: int | None,
     node_id: str | None,
+    model: str,
+    image_count: int,
     get_text: Callable[[Any], str | None],
     get_thinking: Callable[[Any], str | None],
 ) -> tuple[str, str, Any]:
     """
     Consume a streamed Ollama response and return (text, thinking, last_chunk).
-    Honors ComfyUI's cancel between chunks and shows the text on the node as it arrives.
+    Honors ComfyUI's cancel between chunks and reports progress on the node and timing in the console.
     """
-    text, thinking, last = "", "", None
-    show = getattr(PromptServer.instance, "send_progress_text", None) if node_id is not None else None
-    shown_at = 0.0
+    text, thinking, last, tokens, thinking_tokens = "", "", None, 0, 0
+    status = _NodeStatus(node_id, url, model, image_count)
     try:
         for chunk in chunks:
             last = chunk
-            text += get_text(chunk) or ""
-            thinking += get_thinking(chunk) or ""
+            piece, thought = get_text(chunk) or "", get_thinking(chunk) or ""
+            text += piece
+            thinking += thought
+            tokens += bool(piece or thought)
+            thinking_tokens += bool(thought)
             comfy.model_management.throw_exception_if_processing_interrupted()
-            if show and time.monotonic() - shown_at > 0.25:
-                answer, inline = _split_inline_thinking(text)
-                show(answer or "Thinking...\n" + (thinking + inline)[-2000:], node_id)
-                shown_at = time.monotonic()
+            status.update(text, thinking, tokens)
     except (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError) as e:
         raise RuntimeError(f"Could not connect to Ollama at {url}. Make sure the Ollama server is running and the URL is correct.") from e
     except httpx.ReadTimeout as e:
@@ -208,6 +299,7 @@ def _stream(
             "Raise 'request_timeout' in Ollama Options if it needs more time."
         ) from e
     finally:
+        status.stop_waiting()
         # Closing the stream drops the connection, which makes Ollama stop generating after a cancel or error.
         close = getattr(chunks, "close", None)
         if close is not None:
@@ -216,11 +308,11 @@ def _stream(
     text, inline = _split_inline_thinking(text)
     thinking = "\n".join(part for part in (thinking, inline) if part)
 
-    if show:
-        show(text, node_id)
+    status.show(text)
+    _log_timing(model, last, thinking_tokens)
     if last is not None and last.done_reason == "length" and not text:
-        print("[Ollama] Generation hit the token limit (num_predict) before producing an answer. "
-              "Disable 'think' or raise num_predict.")
+        logging.warning("[Ollama] Generation hit the token limit (num_predict) before producing an answer. "
+                        "Disable 'think' or raise num_predict.")
     return text, thinking, last
 
 
@@ -563,7 +655,7 @@ request timeout: {request_timeout}
                     format=format,
                     stream=True,
                 ),
-                url, request_timeout, unique_id,
+                url, request_timeout, unique_id, model, len(images_b64 or []),
                 get_text=lambda chunk: chunk.response,
                 get_thinking=lambda chunk: chunk.thinking,
             )
@@ -835,7 +927,7 @@ request timeout: {request_timeout}
                     format=ollama_format,
                     stream=True,
                 ),
-                url, request_timeout, unique_id,
+                url, request_timeout, unique_id, model, len(images_b64 or []),
                 get_text=lambda chunk: chunk.message.content,
                 get_thinking=lambda chunk: chunk.message.thinking,
             )
