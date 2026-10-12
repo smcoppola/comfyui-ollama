@@ -1,8 +1,11 @@
 from __future__ import annotations
 import copy
+import logging
 import random
 import re
+import sys
 import time
+from importlib.metadata import PackageNotFoundError, version as package_version
 
 import httpx
 from ollama import AsyncClient, Client
@@ -33,6 +36,30 @@ THINK_LEVELS = ["auto", "low", "medium", "high"]
 
 # Chat messages remembered per node (unique_id) when 'remember_history' is enabled
 CHAT_SESSIONS: dict[str, list[dict]] = {}
+
+MIN_OLLAMA_VERSION = "0.6.2"
+
+
+def _ollama_version_problem() -> str | None:
+    """Explain how to update the 'ollama' Python package if it's older than these nodes need, else None."""
+    try:
+        installed = package_version("ollama")
+    except PackageNotFoundError:
+        return None
+    if tuple(int(n) for n in re.findall(r"\d+", installed)[:3]) >= tuple(int(n) for n in MIN_OLLAMA_VERSION.split(".")):
+        return None
+    return (
+        f"comfyui-ollama needs version {MIN_OLLAMA_VERSION} or newer of the 'ollama' Python package "
+        f"(the library ComfyUI uses to talk to Ollama, not the Ollama app), but this ComfyUI has {installed}. "
+        f"To update it, run this command and then restart ComfyUI:\n"
+        f'"{sys.executable}" -m pip install -U "ollama>={MIN_OLLAMA_VERSION},<1"'
+    )
+
+
+# Checked once at startup, then shown in the console, the model list notification and node errors.
+OLLAMA_VERSION_PROBLEM = _ollama_version_problem()
+if OLLAMA_VERSION_PROBLEM:
+    logging.warning(OLLAMA_VERSION_PROBLEM)
 
 # Function to filter enabled options
 def _filter_enabled_options(options: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -143,9 +170,17 @@ def _error_response(e: Exception):
     return web.json_response({"error": str(e) or type(e).__name__}, status=502)
 
 
+def _version_problem_response():
+    # 'summary' tells the frontend this is a setup problem, shown until dismissed so the command can be copied.
+    return web.json_response({"error": OLLAMA_VERSION_PROBLEM, "summary": "Update the ollama Python package"}, status=500)
+
+
 @PromptServer.instance.routes.post("/ollama/get_models")
 async def get_models_endpoint(request):
     data = await request.json()
+
+    if OLLAMA_VERSION_PROBLEM:
+        return _version_problem_response()
 
     try:
         async with AsyncClient(host=data.get("url"), timeout=5) as client:
@@ -160,6 +195,9 @@ async def get_models_endpoint(request):
 async def unload_models_endpoint(request):
     """Unload every model Ollama has in memory, freeing VRAM for ComfyUI."""
     data = await request.json()
+
+    if OLLAMA_VERSION_PROBLEM:
+        return _version_problem_response()
 
     try:
         async with AsyncClient(host=data.get("url"), timeout=30) as client:
@@ -382,6 +420,9 @@ class OllamaGenerateV2:
         return float("nan") if disable_cache else None
 
     def ollama_generate_v2(self, system, prompt, think, keep_context, format, context = None, options=None, connectivity=None, images=None, meta=None, think_level="auto", disable_cache=False, unique_id=None):
+
+        if OLLAMA_VERSION_PROBLEM:
+            raise RuntimeError(OLLAMA_VERSION_PROBLEM)
 
         if connectivity is None and meta is None:
             raise Exception("Required input connectivity or meta.")
@@ -626,6 +667,9 @@ class OllamaChat:
         think_level: str = "auto",
         disable_cache: bool = False,
     ) -> tuple[str | None, str | None, dict[str, Any], list[dict]]:
+
+        if OLLAMA_VERSION_PROBLEM:
+            raise RuntimeError(OLLAMA_VERSION_PROBLEM)
 
         if meta is None:
             if connectivity is None:

@@ -11,9 +11,20 @@ const postJson = async (path, body) => {
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(data?.error || `${response.status} ${response.statusText}`);
+    const error = new Error(data?.error || `${response.status} ${response.statusText}`);
+    error.summary = data?.summary; // set for setup problems, such as an outdated ollama package
+    throw error;
   }
   return data;
+};
+
+// Setup problems stay on screen until dismissed, so the fix can be read and copied.
+const showError = (summary, detail, error) => {
+  app.extensionManager.toast.add(
+    error.summary
+      ? { severity: "error", summary: error.summary, detail: error.message }
+      : { severity: "error", summary, detail, life: 5000 },
+  );
 };
 
 app.registerExtension({
@@ -64,12 +75,7 @@ app.registerExtension({
             models = await fetchModels(url);
           } catch (error) {
             console.error("Error fetching models:", error);
-            app.extensionManager.toast.add({
-              severity: "error",
-              summary: "Ollama connection error",
-              detail: `Make sure Ollama server is running at ${url}. ${error.message}`,
-              life: 5000,
-            });
+            showError("Ollama connection error", `Could not load the model list from ${url}: ${error.message}`, error);
             return;
           } finally {
             fetching = false;
@@ -107,12 +113,7 @@ app.registerExtension({
             });
           } catch (error) {
             console.error("Error unloading models:", error);
-            app.extensionManager.toast.add({
-              severity: "error",
-              summary: "Ollama unload failed",
-              detail: error.message,
-              life: 5000,
-            });
+            showError("Ollama unload failed", error.message, error);
           } finally {
             unloadButtonWidget.name = "🧹 Unload models";
             this.setDirtyCanvas(true);

@@ -13,7 +13,7 @@ Reliability and speed fixes for current Ollama (tested with Ollama 0.40.3 and Co
 - New "Unload models" button on Ollama Connectivity frees the VRAM Ollama is using, so ComfyUI can use it.
 - Fixed options being ignored on chained nodes connected through `meta`.
 - Fixed the KeyError 'context' crash in Ollama Generate.
-- Requires `ollama>=0.6.2` (the python client), and the unused `dotenv` requirement is removed.
+- Requires `ollama>=0.6.2` (the python client), and the unused `dotenv` requirement is removed. If an older version is installed, the nodes say so and show the command to update it.
 - Node titles now start with 🦙.
 
 23-10-2025:

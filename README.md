@@ -165,6 +165,7 @@ Changing options such as `num_ctx` between runs or between nodes makes Ollama re
 -   **Slow answers**: turn off **think**. Many models think by default, which can take much longer than the answer itself.
 -   **"Ollama sent nothing for ... s"**: the model is still loading or is short on VRAM. Raise **request_timeout**, use a smaller model, or free VRAM with **Unload models**.
 -   **"Could not connect to Ollama"**: check that Ollama is running and that the URL in OllamaConnectivity is correct.
+-   **"comfyui-ollama needs version 0.6.2 or newer of the 'ollama' Python package"**: run the command shown in the message, then restart ComfyUI. This updates the Python library ComfyUI uses to talk to Ollama, not the Ollama app.
 
 ### Deprecated nodes
 
