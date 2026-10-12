@@ -101,7 +101,7 @@ Inputs:
 
 Settings:
 
--   **think**: let the model reason before answering. The reasoning goes to the `thinking` output. Many current models think by default, so turning this off makes them answer much faster.
+-   **think**: let the model reason before answering. The reasoning goes to the `thinking` output. Many current models think by default, so turning this off makes them answer much faster. Ollama separates the reasoning from the answer. If a model writes it inside `<think>` tags that Ollama doesn't recognize, the node moves it out of `result` too.
 -   **think_level**: `auto` uses the model's default. `low`/`medium`/`high` only work on models that support thinking levels, such as gpt-oss.
 -   **seed**: the random seed for the answer, with ComfyUI's usual **control after generate**. `fixed` (the default) reuses the previous result while nothing changes. `randomize` gives a fresh answer on every run. The same seed and inputs usually give the same answer.
 

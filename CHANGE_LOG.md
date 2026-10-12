@@ -9,6 +9,7 @@ Reliability and speed fixes for current Ollama (tested with Ollama 0.40.3 and Co
 - Loading the model list no longer freezes the ComfyUI interface when the Ollama URL is wrong or slow, and errors are shown in the notification.
 - The model list is sorted alphabetically.
 - New `think_level` input (auto/low/medium/high) on Ollama Generate and Ollama Chat, for models with thinking levels such as gpt-oss.
+- If a model writes its reasoning inside `<think>` tags that Ollama doesn't recognize (usually a custom import), Ollama Generate and Ollama Chat move it from `result` to `thinking`.
 - New `seed` input on Ollama Generate and Ollama Chat, with ComfyUI's usual control after generate. `fixed` (the default) reuses the previous result while nothing changes; `randomize` gives a fresh answer on every run. The seed on Ollama Options is deprecated; if it's enabled, it still overrides the node's seed.
 - Ollama Options: `stop` works again. It was sent as plain text, which current Ollama rejects, so every request failed when it was enabled.
 - Ollama Options: `mirostat`, `mirostat_eta`, `mirostat_tau` and `tfs_z` are no longer supported by Ollama. They're kept so older workflows load, but they're no longer sent, and a warning is logged if they're enabled.

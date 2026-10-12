@@ -142,6 +142,39 @@ def _images_to_b64(images: torch.Tensor | None) -> list[str] | None:
     return images_b64
 
 
+_THINK_OPEN = re.compile(r"<(?:think|thinking)>", re.IGNORECASE)
+_THINK_CLOSE = re.compile(r"</(?:think|thinking)>", re.IGNORECASE)
+_THINK_BLOCK = re.compile(r"<(?:think|thinking)>(.*?)</(?:think|thinking)>\s*", re.DOTALL | re.IGNORECASE)
+
+
+def _split_inline_thinking(text: str) -> tuple[str, str]:
+    """
+    Fallback for models whose <think> tags Ollama doesn't recognize: move the reasoning out of the answer.
+    Returns (answer, reasoning found in it). Text without think tags is returned unchanged.
+    """
+    found = []
+    close, open_ = _THINK_CLOSE.search(text), _THINK_OPEN.search(text)
+    if close and (open_ is None or close.start() < open_.start()):
+        # The prompt template already opened <think>, so the output only has the closing tag.
+        found.append(text[:close.start()])
+        text = text[close.end():]
+
+    def take(match):
+        found.append(match.group(1))
+        return ""
+
+    text = _THINK_BLOCK.sub(take, text)
+    open_ = _THINK_OPEN.search(text)
+    if open_:
+        # Cut off mid-thought, e.g. by num_predict: the rest is all reasoning.
+        found.append(text[open_.end():])
+        text = text[:open_.start()]
+
+    if not found:
+        return text, ""
+    return text.strip(), "\n".join(part.strip() for part in found if part.strip())
+
+
 def _stream(
     chunks: Iterator[Any],
     url: str,
@@ -164,7 +197,8 @@ def _stream(
             thinking += get_thinking(chunk) or ""
             comfy.model_management.throw_exception_if_processing_interrupted()
             if show and time.monotonic() - shown_at > 0.25:
-                show(text or "Thinking...\n" + thinking[-2000:], node_id)
+                answer, inline = _split_inline_thinking(text)
+                show(answer or "Thinking...\n" + (thinking + inline)[-2000:], node_id)
                 shown_at = time.monotonic()
     except (httpx.ConnectError, httpx.ConnectTimeout, ConnectionError) as e:
         raise RuntimeError(f"Could not connect to Ollama at {url}. Make sure the Ollama server is running and the URL is correct.") from e
@@ -178,6 +212,9 @@ def _stream(
         close = getattr(chunks, "close", None)
         if close is not None:
             close()
+
+    text, inline = _split_inline_thinking(text)
+    thinking = "\n".join(part for part in (thinking, inline) if part)
 
     if show:
         show(text, node_id)
