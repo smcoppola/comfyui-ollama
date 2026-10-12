@@ -15,7 +15,7 @@ To use this properly, you would need a running Ollama server reachable from the 
 ### 1. Install ollama server on the desired host
 
 <a href="https://ollama.com/" target="_blank">
-  <img src="https://img.shields.io/badge/v0.5.7-green.svg?style=for-the-badge&labelColor=gray&label=Ollama&color=blue" alt=""/>
+  <img src="https://img.shields.io/badge/v0.40.3-green.svg?style=for-the-badge&labelColor=gray&label=Ollama&color=blue" alt=""/>
 </a>
 
 <details>
@@ -99,6 +99,14 @@ Inputs:
 -   **context** (optional), a context from other OllamaConnectivity
 -   **meta** (optional), passing metadata of the OllamaConnectivity and OllamaOptions from other OllamaGenerate node.
 
+Settings:
+
+-   **think**: let the model reason before answering. The reasoning goes to the `thinking` output. Many current models think by default, so turning this off makes them answer much faster.
+-   **think_level**: `auto` uses the model's default. `low`/`medium`/`high` only work on models that support thinking levels, such as gpt-oss.
+-   **disable_cache**: re-run on every queue even when the inputs haven't changed, to get a fresh answer each time.
+
+The response is shown on the node while it's being generated, and ComfyUI's cancel button stops it.
+
 **Notes:**
 
 -   For this node to be operational, **OllamaConnectivity** or **meta** must be inputted!.
@@ -110,9 +118,10 @@ A node for **conversational interaction** using the dedicated Ollama chat endpoi
 
 -   **Functionality:** Unlike `OllamaGenerate`, this node is designed specifically for multi-turn conversations and cloud models with your Ollama public key (see the Configuration section).
 -   **Key Features:**
-    -   Conversation history is handled natively within the node instance.
-    -   Dedicated history outputs for **chaining multiple chat nodes**.
-    -   Option to **reset** the current conversation history on demand.
+    -   Each run starts a new conversation by default, which keeps prompts short and fast.
+    -   Turn on **remember_history** to keep the conversation across runs (until ComfyUI restarts). **reset_session** clears it.
+    -   The **history** output carries the conversation, for **chaining multiple chat nodes** in the same run.
+    -   Same **think**, **think_level** and **disable_cache** settings as OllamaGenerate.
 
 Inputs:
 
@@ -121,18 +130,21 @@ Inputs:
 -   **images** (optional)
 -   **meta** (optional), passing metadata of the OllamaConnectivity and
     OllamaOptions from other OllamaChat node.
--   **history** (optional), passing history ID from other OllamaChat node.
+-   **history** (optional), the conversation from another OllamaChat node's history output.
 
 Outputs:
 
 -   **result**: The generated text
 -   **thinking**: The thinking text
 -   **meta**: The metadata to pass to the next OllamaChat node
--   **history**: The history ID to pass to the next OllamaChat node
+-   **history**: The conversation so far, to pass to the next OllamaChat node
 
 ### OllamaConnectivity
 
-A node responsible only fot the connectivity to the ollama server
+A node responsible only for the connectivity to the ollama server.
+
+-   **🔄 Reconnect** reloads the model list, for example after installing a new model.
+-   **🧹 Unload models** unloads every model Ollama has in memory, so ComfyUI gets the VRAM back. Setting **keep_alive** to 0 does this automatically after each run.
 
 ### OllamaOptions
 
@@ -143,6 +155,16 @@ For an option to take effect, each option have also `enable/disable`, enabled op
 Ollama API options can be found in [this table](https://github.com/ollama/ollama/blob/main/docs/modelfile.md#valid-parameters-and-values).
 
 **Note**: There is an additional option `debug` that enables debug print in the cli, its not part of ollama api.
+
+**request_timeout**: seconds to wait while Ollama sends nothing (loading the model, reading the prompt, or between tokens) before the node fails. Default 300, 0 = no limit. Without an Options node the default applies.
+
+Changing options such as `num_ctx` between runs or between nodes makes Ollama reload the model, which is slow.
+
+## Troubleshooting
+
+-   **Slow answers**: turn off **think**. Many models think by default, which can take much longer than the answer itself.
+-   **"Ollama sent nothing for ... s"**: the model is still loading or is short on VRAM. Raise **request_timeout**, use a smaller model, or free VRAM with **Unload models**.
+-   **"Could not connect to Ollama"**: check that Ollama is running and that the URL in OllamaConnectivity is correct.
 
 ### Deprecated nodes
 
