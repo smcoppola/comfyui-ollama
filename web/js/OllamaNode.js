@@ -1,5 +1,21 @@
 import { app } from "/scripts/app.js";
 
+const postJson = async (path, body) => {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new Error(data?.error || `${response.status} ${response.statusText}`);
+  }
+  return data;
+};
+
 app.registerExtension({
   name: "Comfy.OllamaNode",
   aboutPageBadges: [
@@ -20,31 +36,26 @@ app.registerExtension({
         const urlWidget = this.widgets.find((w) => w.name === "url");
         const modelWidget = this.widgets.find((w) => w.name === "model");
         let refreshButtonWidget = {};
+        let unloadButtonWidget = null;
         if (nodeData.name === "OllamaConnectivityV2") {
           refreshButtonWidget = this.addWidget("button", "🔄 Reconnect");
+          // Not saved in workflows or prompts, so saved widget values keep their positions.
+          unloadButtonWidget = this.addWidget("button", "🧹 Unload models", null, null, { serialize: false });
+          unloadButtonWidget.serialize = false;
         }
 
         const fetchModels = async (url) => {
-          const response = await fetch("/ollama/get_models", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              url,
-            }),
-          });
-
-          if (response.ok) {
-            const models = await response.json();
-            console.debug("Fetched models:", models);
-            return models;
-          } else {
-            throw new Error(response);
-          }
+          const models = await postJson("/ollama/get_models", { url });
+          console.debug("Fetched models:", models);
+          return models;
         };
 
+        let fetching = false;
         const updateModels = async () => {
+          if (fetching) {
+            return;
+          }
+          fetching = true;
           refreshButtonWidget.name = "⏳ Fetching...";
           const url = urlWidget.value;
 
@@ -56,12 +67,14 @@ app.registerExtension({
             app.extensionManager.toast.add({
               severity: "error",
               summary: "Ollama connection error",
-              detail: "Make sure Ollama server is running",
+              detail: `Make sure Ollama server is running at ${url}. ${error.message}`,
               life: 5000,
             });
+            return;
+          } finally {
+            fetching = false;
             refreshButtonWidget.name = "🔄 Reconnect";
             this.setDirtyCanvas(true);
-            return;
           }
 
           const prevValue = modelWidget.value;
@@ -76,13 +89,41 @@ app.registerExtension({
             modelWidget.value = models[0]; // set first as default.
           }
 
-          refreshButtonWidget.name = "🔄 Reconnect";
           this.setDirtyCanvas(true);
           console.debug("Updated modelWidget.value:", modelWidget.value);
         };
 
+        // Unload every model Ollama has in memory, so ComfyUI gets the VRAM back.
+        const unloadModels = async () => {
+          unloadButtonWidget.name = "⏳ Unloading...";
+          this.setDirtyCanvas(true);
+          try {
+            const unloaded = await postJson("/ollama/unload", { url: urlWidget.value });
+            app.extensionManager.toast.add({
+              severity: "success",
+              summary: "Ollama models unloaded",
+              detail: unloaded.length > 0 ? unloaded.join(", ") : "No models were loaded",
+              life: 4000,
+            });
+          } catch (error) {
+            console.error("Error unloading models:", error);
+            app.extensionManager.toast.add({
+              severity: "error",
+              summary: "Ollama unload failed",
+              detail: error.message,
+              life: 5000,
+            });
+          } finally {
+            unloadButtonWidget.name = "🧹 Unload models";
+            this.setDirtyCanvas(true);
+          }
+        };
+
         urlWidget.callback = updateModels;
         refreshButtonWidget.callback = updateModels;
+        if (unloadButtonWidget) {
+          unloadButtonWidget.callback = unloadModels;
+        }
 
         const dummy = async () => {
           // calling async method will update the widgets with actual value from the browser and not the default from Node definition.
